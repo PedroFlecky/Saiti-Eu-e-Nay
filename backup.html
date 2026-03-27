@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Backup — Nossos Momentos</title>
+<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=VT323&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#0d0010;color:#ffd6f0;font-family:'VT323',monospace;font-size:22px;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:2rem;}
+.box{background:#1a0025;border:4px solid #ff2d9b;box-shadow:6px 6px 0 #99005a;padding:2.5rem;max-width:520px;width:100%;position:relative;}
+.box::before{content:'';position:absolute;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,#ff2d9b,#00fff7,#ff2d9b);}
+h1{font-family:'Press Start 2P',monospace;font-size:clamp(0.7rem,2vw,1rem);color:#ff2d9b;line-height:1.8;margin-bottom:1.5rem;}
+p{font-size:18px;color:#9966aa;line-height:1.7;margin-bottom:1rem;}
+.btn{font-family:'Press Start 2P',monospace;font-size:0.6rem;padding:0.85rem 1.5rem;border:3px solid #ff2d9b;background:#22003a;color:#ff2d9b;cursor:pointer;box-shadow:4px 4px 0 #99005a;letter-spacing:0.05em;line-height:1.8;transition:all 0.08s;display:block;width:100%;text-align:center;margin-top:1.25rem;}
+.btn:hover{background:#ff2d9b;color:#0d0010;transform:translate(2px,2px);box-shadow:2px 2px 0 #99005a;}
+.btn:disabled{opacity:0.5;cursor:not-allowed;transform:none;}
+.btn.restore{border-color:#00fff7;color:#00fff7;background:#003322;}
+.btn.restore:hover{background:#00fff7;color:#0d0010;}
+#status{font-family:'Press Start 2P',monospace;font-size:0.45rem;color:#44ff77;margin-top:1.25rem;line-height:1.8;display:none;}
+#status.error{color:#ff4444;}
+#status.visible{display:block;}
+.divider{border:none;border-top:2px dashed #5a004a;margin:1.75rem 0;}
+#restore-input{display:none;}
+#preview{background:#0d0010;border:2px solid #5a004a;padding:1rem;margin-top:1rem;font-size:15px;color:#9966aa;line-height:1.7;display:none;max-height:200px;overflow-y:auto;}
+#preview.visible{display:block;}
+</style>
+</head>
+<body>
+<div class="box">
+  <h1>▶ BACKUP &amp; RESTORE</h1>
+  <p>Faça o download de todos os seus dados ou restaure a partir de um backup anterior.</p>
+
+  <hr class="divider">
+
+  <p><strong style="color:#ffd6f0">📥 EXPORTAR</strong><br>Baixa um arquivo .json com todos os encontros, ideias, conquistas e configurações.</p>
+  <button class="btn" id="btn-export" onclick="exportData()">⬇ BAIXAR BACKUP AGORA</button>
+
+  <hr class="divider">
+
+  <p><strong style="color:#ffd6f0">📤 IMPORTAR</strong><br>Restaura dados a partir de um arquivo de backup. <span style="color:#ff4444">Atenção: substitui os dados atuais!</span></p>
+  <button class="btn restore" onclick="document.getElementById('restore-input').click()">⬆ SELECIONAR ARQUIVO .JSON</button>
+  <input type="file" id="restore-input" accept=".json" onchange="previewRestore(this)">
+  <div id="preview"></div>
+  <button class="btn restore" id="btn-restore" style="display:none" onclick="confirmRestore()">✓ CONFIRMAR RESTAURAÇÃO</button>
+
+  <div id="status"></div>
+</div>
+
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/12.10.0/firebase-app.js";
+import { getFirestore, collection, doc, addDoc, setDoc, getDocs, deleteDoc, query } from "https://www.gstatic.com/firebasejs/12.10.0/firebase-firestore.js";
+
+const firebaseConfig = {
+  apiKey: "AIzaSyDfdJujd1I2OHkuMgBX_II4I24zYEc5JDg",
+  authDomain: "nossos-momentos-4ba91.firebaseapp.com",
+  projectId: "nossos-momentos-4ba91",
+  storageBucket: "nossos-momentos-4ba91.firebasestorage.app",
+  messagingSenderId: "607619813128",
+  appId: "1:607619813128:web:79867d120f019a6e52a6bd"
+};
+
+const app = initializeApp(firebaseConfig);
+const db = getFirestore(app);
+
+function setStatus(msg, isError=false) {
+  const el = document.getElementById('status');
+  el.textContent = msg;
+  el.className = 'visible' + (isError ? ' error' : '');
+}
+
+/* ── EXPORT ── */
+window.exportData = async () => {
+  const btn = document.getElementById('btn-export');
+  btn.disabled = true;
+  btn.textContent = '⏳ CARREGANDO...';
+  setStatus('Buscando dados no Firebase...');
+  try {
+    const [datesSnap, ideasSnap, achSnap, cfgSnap, bgSnap] = await Promise.all([
+      getDocs(query(collection(db, 'dates'))),
+      getDocs(query(collection(db, 'ideas'))),
+      getDocs(query(collection(db, 'achievements'))),
+      getDocs(query(collection(db, 'config'))),
+      getDocs(query(collection(db, 'config'))),
+    ]);
+
+    const backup = {
+      exportedAt: new Date().toISOString(),
+      version: 1,
+      dates: datesSnap.docs.map(d => ({ _id: d.id, ...d.data() })),
+      ideas: ideasSnap.docs.map(d => ({ _id: d.id, ...d.data() })),
+      achievements: achSnap.docs.map(d => ({ _id: d.id, ...d.data() })),
+      config: {},
+    };
+
+    // configs are docs inside 'config' collection
+    const cfgFull = await getDocs(collection(db, 'config'));
+    cfgFull.docs.forEach(d => { backup.config[d.id] = d.data(); });
+
+    const json = JSON.stringify(backup, null, 2);
+    const blob = new Blob([json], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `nossos-momentos-backup-${new Date().toISOString().slice(0,10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+
+    setStatus(`✓ BACKUP CONCLUÍDO! ${backup.dates.length} encontros, ${backup.ideas.length} ideias, ${backup.achievements.length} conquistas.`);
+  } catch(e) {
+    setStatus('ERRO: ' + e.message, true);
+  }
+  btn.disabled = false;
+  btn.textContent = '⬇ BAIXAR BACKUP AGORA';
+};
+
+/* ── PREVIEW RESTORE ── */
+let restoreData = null;
+window.previewRestore = (input) => {
+  const file = input.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = e => {
+    try {
+      restoreData = JSON.parse(e.target.result);
+      const preview = document.getElementById('preview');
+      preview.className = 'visible';
+      preview.innerHTML = `
+        <strong style="color:#00fff7">Arquivo: ${file.name}</strong><br>
+        Exportado em: ${restoreData.exportedAt ? new Date(restoreData.exportedAt).toLocaleString('pt-BR') : '?'}<br>
+        📅 ${restoreData.dates?.length || 0} encontros<br>
+        💡 ${restoreData.ideas?.length || 0} ideias<br>
+        🏆 ${restoreData.achievements?.length || 0} conquistas<br>
+        <span style="color:#ff4444;margin-top:0.5rem;display:block">⚠ Isso VAI SUBSTITUIR todos os dados atuais!</span>
+      `;
+      document.getElementById('btn-restore').style.display = 'block';
+    } catch(err) {
+      setStatus('ARQUIVO INVÁLIDO — não é um backup válido.', true);
+      restoreData = null;
+      document.getElementById('btn-restore').style.display = 'none';
+    }
+  };
+  reader.readAsText(file);
+};
+
+/* ── RESTORE ── */
+window.confirmRestore = async () => {
+  if (!restoreData) return;
+  if (!confirm('TEM CERTEZA? Isso vai apagar e substituir todos os dados atuais pelo backup selecionado.')) return;
+
+  const btn = document.getElementById('btn-restore');
+  btn.disabled = true;
+  btn.textContent = '⏳ RESTAURANDO...';
+  setStatus('Iniciando restauração...');
+
+  try {
+    // delete all existing docs in each collection
+    setStatus('Apagando dados atuais...');
+    for (const col of ['dates', 'ideas', 'achievements']) {
+      const snap = await getDocs(collection(db, col));
+      for (const d of snap.docs) await deleteDoc(doc(db, col, d.id));
+    }
+
+    // restore dates
+    setStatus('Restaurando encontros...');
+    for (const item of (restoreData.dates || [])) {
+      const { _id, ...data } = item;
+      if (_id) await setDoc(doc(db, 'dates', _id), data);
+      else await addDoc(collection(db, 'dates'), data);
+    }
+
+    // restore ideas
+    setStatus('Restaurando ideias...');
+    for (const item of (restoreData.ideas || [])) {
+      const { _id, ...data } = item;
+      if (_id) await setDoc(doc(db, 'ideas', _id), data);
+      else await addDoc(collection(db, 'ideas'), data);
+    }
+
+    // restore achievements
+    setStatus('Restaurando conquistas...');
+    for (const item of (restoreData.achievements || [])) {
+      const { _id, ...data } = item;
+      if (_id) await setDoc(doc(db, 'achievements', _id), data);
+      else await addDoc(collection(db, 'achievements'), data);
+    }
+
+    // restore config
+    setStatus('Restaurando configurações...');
+    if (restoreData.config) {
+      for (const [key, val] of Object.entries(restoreData.config)) {
+        await setDoc(doc(db, 'config', key), val);
+      }
+    }
+
+    setStatus('✓ RESTAURAÇÃO CONCLUÍDA! Recarregue o site principal para ver os dados.');
+    btn.textContent = '✓ RESTAURADO!';
+  } catch(e) {
+    setStatus('ERRO NA RESTAURAÇÃO: ' + e.message, true);
+    btn.disabled = false;
+    btn.textContent = '✓ CONFIRMAR RESTAURAÇÃO';
+  }
+};
+</script>
+</body>
+</html>
